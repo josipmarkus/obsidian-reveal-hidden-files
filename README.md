@@ -4,6 +4,12 @@ An Obsidian desktop plugin that surfaces dot-prefixed files and folders in the F
 
 The plugin ships with default deny patterns for `.git/` and `.venv/` so vaults with real git repositories or Python virtual environments do not freeze on toggle. Other dot-prefixed entries (`.obsidian/`, `.env/`, `.trash/`, `.DS_Store`) appear when the toggle is on by default. Remove the defaults under *Settings → Community plugins → Reveal Hidden Files → Deny patterns* if you want `.git/` or `.venv/` visible; add new patterns there for any other dotfile content you want kept hidden.
 
+## Installation
+
+**From Obsidian:** In Settings → Community plugins → Browse, search for "Reveal Hidden Files", then install and enable it.
+
+**From GitHub:** Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/josipmarkus/obsidian-reveal-hidden-files/releases) into `YourVault/.obsidian/plugins/reveal-hidden-files/`, then enable the plugin in Settings → Community plugins.
+
 ## Usage
 
 1. Enable **Reveal Hidden Files** in Settings → Community plugins.
@@ -65,3 +71,7 @@ npm run dev      # watch build for iterating against a side-loaded vault
 ## Credits
 
 The `reconcileDeletion` interception pattern is adapted from [polyipseity/obsidian-show-hidden-files](https://github.com/polyipseity/obsidian-show-hidden-files), the community plugin that first solved this problem.
+
+## License
+
+MIT — see [LICENSE](LICENSE). You are free to use, modify, and redistribute it.
