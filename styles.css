@@ -1,0 +1,9 @@
+.reveal-hidden-files-deny-row {
+	padding: 0 0 var(--size-4-4) 0;
+}
+
+.reveal-hidden-files-deny-textarea {
+	width: 100%;
+	box-sizing: border-box;
+	font-family: var(--font-monospace);
+}
