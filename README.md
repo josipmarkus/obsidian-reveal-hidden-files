@@ -4,9 +4,15 @@ An Obsidian desktop plugin that surfaces dot-prefixed files and folders in the F
 
 The plugin ships with default deny patterns for `.git/` and `.venv/` so vaults with real git repositories or Python virtual environments do not freeze on toggle. Other dot-prefixed entries (`.obsidian/`, `.env/`, `.trash/`, `.DS_Store`) appear when the toggle is on by default. Remove the defaults under *Settings → Community plugins → Reveal Hidden Files → Deny patterns* if you want `.git/` or `.venv/` visible; add new patterns there for any other dotfile content you want kept hidden.
 
+## Installation
+
+**Install from Obsidian:** Once the plugin is in the Community plugins store, open Settings → Community plugins → Browse, search for "Reveal Hidden Files", then select Install and Enable.
+
+**Manual install:** Before the plugin is accepted, download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/josipmarkus/obsidian-reveal-hidden-files/releases), copy them into `YourVault/.obsidian/plugins/reveal-hidden-files/`, then enable the plugin under Settings → Community plugins.
+
 ## Usage
 
-1. Install and enable **Reveal Hidden Files**.
+1. Enable **Reveal Hidden Files** under Settings → Community plugins (see Installation).
 2. Toggle visibility through any of the following affordances. All four invoke the same toggle state:
    - The eye-off ribbon icon in Obsidian's left ribbon
    - The command palette command *Toggle hidden files visibility*
@@ -52,35 +58,16 @@ Desktop only. The plugin depends on Obsidian's local filesystem adapter and seve
 
 ## Development
 
-Install dependencies:
+Build from source:
 
 ```bash
-npm install
+npm install      # install dependencies
+npm run build    # production bundle (writes main.js)
+npm run dev      # watch build for iterating against a side-loaded vault
 ```
 
-Build the plugin (single optimized output):
-
-```bash
-npm run build
-```
-
-Build with watch mode (rebuild on every source change; useful when iterating against a side-loaded vault):
-
-```bash
-npm run dev
-```
-
-The build writes `main.js`, which Obsidian loads. `main.js` is generated and is not committed to the repository.
-
-## Release
-
-Tag a release matching the version in `manifest.json` (for example `0.1.0`) and push to GitHub. The release should attach:
-
-- `main.js`
-- `manifest.json`
-
-These are the files Obsidian's community-plugins index downloads when a user installs the plugin through Obsidian's in-app *Community plugins* browser.
+`main.js` is generated and is not committed to the repository.
 
 ## Credits
 
-The `reconcileDeletion` interception pattern is adapted from [polyipseity/obsidian-show-hidden-files](https://github.com/polyipseity/obsidian-show-hidden-files), the well-tested community plugin that first solved this problem cleanly.
+The `reconcileDeletion` interception pattern is adapted from [polyipseity/obsidian-show-hidden-files](https://github.com/polyipseity/obsidian-show-hidden-files), the community plugin that first solved this problem.
