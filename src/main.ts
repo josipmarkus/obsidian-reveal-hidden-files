@@ -25,10 +25,9 @@
  *       (b) `walkNonHiddenForDots("/")` then walks every non-hidden
  *           folder via `adapter.list` and surfaces dot-children at
  *           any depth that listRecursive did not reach. Closes the
- *           depth-coverage gap that v0.3.0 left open in Aeleon-style
- *           vaults with deeply-nested `.audit/`, `.versions/`,
- *           `.reviews/` folders (see ir-007 for the research-discipline
- *           gap and the diagnostic that surfaced it).
+ *           depth-coverage gap that v0.3.0 left open for vaults with
+ *           deeply-nested dot-folders such as `.cache/` or `.backups/`
+ *           inside non-hidden parents.
  *   - On toggle change, iterate `hiddenPaths` and apply the current
  *     filter to each path (surface non-denied, un-surface denied).
  *   - Force-removal fallback for vaults where `reconcileDeletion`
@@ -364,7 +363,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	 *
 	 * Per the v0.3.0 design doc the plugin does NOT touch Obsidian's
 	 * `showUnsupportedFiles` setting. Users who want unrecognized-
-	 * extension files (`.aeml`, `.env`, `.gitkeep`, extension-less
+	 * extension files (`.log`, `.env`, `.gitkeep`, extension-less
 	 * files) to appear enable that setting separately through
 	 * Settings → Files & Links.
 	 */
@@ -378,8 +377,8 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	/**
 	 * Gitignore-style deny matching per requirements v0.3.0 FR3:
 	 *   - Patterns without a `/` match the basename at any depth
-	 *     (e.g., `.DS_Store` matches `.DS_Store`, `system/.DS_Store`,
-	 *     `system/aeleondb/.DS_Store`). The natural mental model users
+	 *     (e.g., `.DS_Store` matches `.DS_Store`, `notes/.DS_Store`,
+	 *     `notes/archive/.DS_Store`). The natural mental model users
 	 *     bring from `.gitignore`, `.dockerignore`, `.npmignore`.
 	 *   - Patterns with a `/` use minimatch full-path globbing
 	 *     (e.g., `.git/**` matches everything inside any root `.git/`,
@@ -460,7 +459,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	 *
 	 * This pass does NOT find dot-children at depth inside non-hidden
 	 * parents. `walkNonHiddenForDots` runs alongside this pass to cover
-	 * that case — see the v0.3.1 design doc and ir-007.
+	 * that case.
 	 */
 	private async initialListRecursive() {
 		const adapter = this.app.vault.adapter as unknown as AdapterInternals;
@@ -479,9 +478,9 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	 * and recurses INTO dot-folders to find their filtered children, but
 	 * it does not re-walk non-hidden parents (those are already in
 	 * Obsidian's vault tree from its normal scan, with dotfiles filtered
-	 * out at any depth). Aeleon-style vaults have `.audit/`, `.versions/`,
-	 * `.reviews/` folders nested 4-5 levels inside non-hidden parents
-	 * (`system/writing/guides/.../.audit/`, `knowledge/glossary/.audit/`).
+	 * out at any depth). Some vaults have dot-folders such as `.cache/`
+	 * or `.backups/` nested several levels inside non-hidden parents
+	 * (`projects/app/.cache/`, `notes/archive/.backups/`).
 	 * `listRecursive("")` does not find them; this method does.
 	 *
 	 * Behavior:
@@ -505,8 +504,8 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 		// v0.3.3: use Node's fs.readdir directly instead of adapter.list.
 		// `adapter.list` applies Obsidian's dotfile filter and silently
 		// omits hidden entries from the returned listing, which made
-		// v0.3.2's walk never surface deep `.audit/`, `.versions/` etc.
-		// — see ir-009. fs.readdir returns every entry on disk regardless
+		// v0.3.2's walk never surface deep `.cache/`, `.backups/` etc.
+		// fs.readdir returns every entry on disk regardless
 		// of name.
 		const fullParent = adapter.getFullPath(parentPath === "/" ? "" : parentPath);
 		let entries: import("fs").Dirent[];
@@ -656,7 +655,7 @@ class RevealHiddenFilesSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Files with unrecognized extensions")
 			.setDesc(
-				"This plugin handles dotfile visibility only. To also show files with unrecognized extensions (.aeml, .env, .gitkeep, extension-less files), enable Obsidian's \"detect all file extensions\" setting under settings → files & links. This plugin does not toggle that setting.",
+				"This plugin handles dotfile visibility only. To also show files with unrecognized extensions (.log, .env, .gitkeep, extension-less files), enable Obsidian's \"detect all file extensions\" setting under settings → files & links. This plugin does not toggle that setting.",
 			);
 	}
 }

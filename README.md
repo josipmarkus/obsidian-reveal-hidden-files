@@ -18,13 +18,13 @@ The plugin ships with default deny patterns for `.git/` and `.venv/` so vaults w
    - The command palette command *Toggle hidden files visibility*
    - An optional keyboard shortcut you bind under *Settings → Hotkeys*
    - The toggle control inside the plugin's settings panel
-3. Optional: edit deny patterns under *Settings → Community plugins → Reveal Hidden Files → Deny patterns*. The defaults (`.git`, `.venv`) keep heavy folders hidden even when the toggle is on; add your own to keep additional entries hidden, or remove either default to surface that folder. Patterns use **gitignore-style semantics**: a pattern without a forward slash matches the basename at any depth (e.g., `.DS_Store` matches `.DS_Store` everywhere it appears in the vault; `node_modules` matches every `node_modules` folder; `.audit` matches every `.audit` folder). A pattern containing a forward slash matches the full vault-relative path via minimatch glob syntax (e.g., `.git/**` matches everything inside any root `.git/`; `.obsidian/plugins/*/data.json` matches that specific path; `**/.DS_Store` is equivalent to bare `.DS_Store` under the basename rule but more explicit).
-4. Optional: enable *Settings → Files & Links → Detect all file extensions* in Obsidian if you want files with unrecognized extensions (such as `.aeml`, `.env`, or extension-less files) to also appear in the File Explorer. This plugin handles dotfile visibility only; the extension setting is a separate Obsidian preference the plugin does not modify.
+3. Optional: edit deny patterns under *Settings → Community plugins → Reveal Hidden Files → Deny patterns*. The defaults (`.git`, `.venv`) keep heavy folders hidden even when the toggle is on; add your own to keep additional entries hidden, or remove either default to surface that folder. Patterns use **gitignore-style semantics**: a pattern without a forward slash matches the basename at any depth (e.g., `.DS_Store` matches `.DS_Store` everywhere it appears in the vault; `node_modules` matches every `node_modules` folder; `.cache` matches every `.cache` folder). A pattern containing a forward slash matches the full vault-relative path via minimatch glob syntax (e.g., `.git/**` matches everything inside any root `.git/`; `.obsidian/plugins/*/data.json` matches that specific path; `**/.DS_Store` is equivalent to bare `.DS_Store` under the basename rule but more explicit).
+4. Optional: enable *Settings → Files & Links → Detect all file extensions* in Obsidian if you want files with unrecognized extensions (such as `.log`, `.env`, or extension-less files) to also appear in the File Explorer. This plugin handles dotfile visibility only; the extension setting is a separate Obsidian preference the plugin does not modify.
 
 ## Behavior
 
 - Reveals any vault-relative path whose name begins with `.`, at any depth — except entries matching a deny pattern
-- Works for root-level and nested hidden paths, including deep dot-folders inside non-hidden parents (`system/writing/guides/.../.audit/`, `knowledge/glossary/.versions/`, etc.)
+- Works for root-level and nested hidden paths, including deep dot-folders inside non-hidden parents (`projects/app/.cache/`, `notes/archive/.backups/`, etc.)
 - Deny patterns use gitignore-style basename matching for bare names; full-path minimatch for patterns with `/`
 - Toggle state and deny patterns persist per vault across Obsidian restarts
 - Default deny patterns for `.git` and `.venv` are seeded on first plugin load; remove them in settings if you want those folders visible
@@ -48,7 +48,7 @@ Desktop only. The plugin depends on Obsidian's local filesystem adapter and seve
 
 ## Security and privacy
 
-- Reads your vault's directory listings through Node.js filesystem APIs to find hidden files. Obsidian's own file API filters out dot-prefixed entries, so deeply-nested ones (such as `.audit/` or `.versions/`) are invisible to it; reading the filesystem directly is the only way to surface them. The plugin only *reads* directory names to discover entries — it never creates, modifies, or deletes files through this access.
+- Reads your vault's directory listings through Node.js filesystem APIs to find hidden files. Obsidian's own file API filters out dot-prefixed entries, so deeply-nested ones (such as `.cache/` or `.backups/`) are invisible to it; reading the filesystem directly is the only way to surface them. The plugin only *reads* directory names to discover entries — it never creates, modifies, or deletes files through this access.
 - Uses undocumented Obsidian internals to register hidden paths in the File Explorer
 - Reveals hidden files that may contain secrets, credentials, or configuration; review your deny patterns before sharing screenshots of your vault
 - Does not use telemetry
