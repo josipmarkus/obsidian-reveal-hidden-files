@@ -48,7 +48,7 @@ Desktop only. The plugin depends on Obsidian's local filesystem adapter and seve
 
 ## Security and privacy
 
-- Uses Node.js filesystem APIs to read the current vault
+- Reads your vault's directory listings through Node.js filesystem APIs to find hidden files. Obsidian's own file API filters out dot-prefixed entries, so deeply-nested ones (such as `.audit/` or `.versions/`) are invisible to it; reading the filesystem directly is the only way to surface them. The plugin only *reads* directory names to discover entries — it never creates, modifies, or deletes files through this access.
 - Uses undocumented Obsidian internals to register hidden paths in the File Explorer
 - Reveals hidden files that may contain secrets, credentials, or configuration; review your deny patterns before sharing screenshots of your vault
 - Does not use telemetry

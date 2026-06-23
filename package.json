@@ -1,6 +1,6 @@
 {
 	"name": "reveal-hidden-files",
-	"version": "0.3.8",
+	"version": "0.3.9",
 	"description": "Toggle the visibility of hidden files and folders in the File Explorer panel.",
 	"main": "main.js",
 	"scripts": {

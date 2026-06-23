@@ -270,7 +270,11 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 		});
 	}
 
-	async onunload() {
+	onunload() {
+		void this.cleanup();
+	}
+
+	private async cleanup() {
 		await this.hideAll();
 		this.hiddenPaths.clear();
 		this.surfacedPaths.clear();
@@ -294,40 +298,41 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	 *      `reconcileDeletion` so Obsidian's normal hiding applies.
 	 */
 	private installAdapterPatch() {
-		const plugin = this;
 		const adapter = this.app.vault.adapter as unknown as AdapterInternals;
 
 		this.unpatch = around(
 			adapter as unknown as Record<string, unknown>,
-			"reconcileDeletion" as keyof Record<string, unknown>,
+			"reconcileDeletion",
 			(next) => {
-				const wrapped = async function (
-					this: AdapterInternals,
-					realPath: string,
-					path: string,
-				): Promise<void> {
+				const original = next as (rp: string, p: string) => Promise<void>;
+				// `.call` returns `any` without strictBindCallApply, so funnel the
+				// original invocation through one typed helper to keep the wrapper
+				// returns type-safe.
+				const callOriginal = (rp: string, p: string): Promise<void> =>
+					original.call(adapter, rp, p) as Promise<void>;
+				const wrapped = async (realPath: string, path: string): Promise<void> => {
 					if (!isHiddenPath(path)) {
-						return (next as (rp: string, p: string) => Promise<void>).apply(this, [realPath, path]);
+						return callOriginal(realPath, path);
 					}
 					try {
-						const exists = await this._exists(this.getFullPath(path), path);
+						const exists = await adapter._exists(adapter.getFullPath(path), path);
 						if (!exists) {
-							plugin.hiddenPaths.delete(path);
-							plugin.surfacedPaths.delete(path);
-							return (next as (rp: string, p: string) => Promise<void>).apply(this, [realPath, path]);
+							this.hiddenPaths.delete(path);
+							this.surfacedPaths.delete(path);
+							return callOriginal(realPath, path);
 						}
-						plugin.hiddenPaths.add(path);
-						if (plugin.settings.showHidden && !plugin.isDenied(path)) {
-							await this.reconcileFileInternal(realPath, path);
-							plugin.surfacedPaths.add(path);
+						this.hiddenPaths.add(path);
+						if (this.settings.showHidden && !this.isDenied(path)) {
+							await adapter.reconcileFileInternal(realPath, path);
+							this.surfacedPaths.add(path);
 							return;
 						}
 					} catch {
 						// Ignore wrapper errors; fall through to the original.
 					}
-					return (next as (rp: string, p: string) => Promise<void>).apply(this, [realPath, path]);
+					return callOriginal(realPath, path);
 				};
-				return wrapped as unknown as Record<string, unknown>["reconcileDeletion"];
+				return wrapped;
 			},
 		);
 	}
@@ -543,7 +548,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 			if (this.isDenied(folderPath)) continue;
 			await this.walkNonHiddenForDots(folderPath);
 			if (++processed % 50 === 0) {
-				await new Promise((r) => setTimeout(r, 0));
+				await new Promise((r) => window.setTimeout(r, 0));
 			}
 		}
 	}
@@ -609,7 +614,7 @@ class RevealHiddenFilesSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Show hidden files")
 			.setDesc(
-				"Show files and folders whose names start with a period in the File Explorer panel. Entries matching any deny pattern below stay hidden even when this is on.",
+				"Show files and folders whose names start with a period in the file explorer panel. Entries matching any deny pattern below stay hidden even when this is on.",
 			)
 			.addToggle((toggle) =>
 				toggle
@@ -635,21 +640,23 @@ class RevealHiddenFilesSettingTab extends PluginSettingTab {
 		textarea.value = this.plugin.settings.denyPatterns.join("\n");
 		textarea.placeholder = ".git\n.git/**\n.venv\n.venv/**\n**/.DS_Store";
 		textarea.rows = 8;
-		textarea.addEventListener("input", async () => {
-			this.plugin.settings.denyPatterns = textarea.value
-				.split("\n")
-				.map((p) => p.trim())
-				.filter((p) => p.length > 0);
-			await this.plugin.saveSettings();
-			if (this.plugin.settings.showHidden) {
-				await this.plugin.applyVisibility();
-			}
+		textarea.addEventListener("input", () => {
+			void (async () => {
+				this.plugin.settings.denyPatterns = textarea.value
+					.split("\n")
+					.map((p) => p.trim())
+					.filter((p) => p.length > 0);
+				await this.plugin.saveSettings();
+				if (this.plugin.settings.showHidden) {
+					await this.plugin.applyVisibility();
+				}
+			})();
 		});
 
 		new Setting(containerEl)
 			.setName("Files with unrecognized extensions")
 			.setDesc(
-				"This plugin handles dotfile visibility only. To also show files with unrecognized extensions (.aeml, .env, .gitkeep, extension-less files), enable Obsidian's \"Detect all file extensions\" setting under Settings → Files & Links. This plugin does not toggle that setting.",
+				"This plugin handles dotfile visibility only. To also show files with unrecognized extensions (.aeml, .env, .gitkeep, extension-less files), enable Obsidian's \"detect all file extensions\" setting under settings → files & links. This plugin does not toggle that setting.",
 			);
 	}
 }
