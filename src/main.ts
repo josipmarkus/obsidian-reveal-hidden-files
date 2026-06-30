@@ -48,7 +48,7 @@
  * that differ between desktop and mobile builds.
  */
 
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder } from "obsidian";
+import { App, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder } from "obsidian";
 import { minimatch } from "minimatch";
 import * as fs from "fs";
 
@@ -237,6 +237,12 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	private unpatch: (() => void) | null = null;
 	private toggling = false;
 
+	// "Go to settings" button injected on the Hotkeys tab — see setupHotkeysBackButton.
+	private hotkeysBackBodyObserver: MutationObserver | null = null;
+	private hotkeysBackTabObserver: MutationObserver | null = null;
+	private hotkeysBackWatchedModal: HTMLElement | null = null;
+	private hotkeysBackReevalQueued = false;
+
 	async onload() {
 		await this.loadSettings();
 
@@ -253,6 +259,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 		);
 
 		this.addSettingTab(new RevealHiddenFilesSettingTab(this.app, this));
+		this.setupHotkeysBackButton();
 
 		this.installAdapterPatch();
 
@@ -273,6 +280,204 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 		void this.cleanup();
 	}
 
+	/**
+	 * Set this plugin's recommended shortcut (⌥H for "Toggle hidden files
+	 * visibility") in one click. Replaces only this plugin's own shortcut; other
+	 * plugins and core hotkeys are untouched. The command ships with no shortcut.
+	 */
+	applyRecommendedHotkeys(): void {
+		try {
+			const hk = (this.app as unknown as {
+				hotkeyManager?: {
+					setHotkeys?: (id: string, h: unknown[]) => void;
+					customKeys?: Record<string, unknown[]>;
+					bake?: () => void;
+					save?: () => void;
+				};
+			}).hotkeyManager;
+			if (!hk) throw new Error("no hotkey manager");
+			const scheme: Record<string, { modifiers: string[]; key: string }> = {
+				"toggle-hidden-files": { modifiers: ["Alt"], key: "H" },
+			};
+			let applied = 0;
+			for (const [cmd, chord] of Object.entries(scheme)) {
+				const id = `${this.manifest.id}:${cmd}`;
+				if (typeof hk.setHotkeys === "function") hk.setHotkeys(id, [chord]);
+				else if (hk.customKeys) hk.customKeys[id] = [chord];
+				else throw new Error("unsupported hotkey manager");
+				applied++;
+			}
+			hk.bake?.();
+			hk.save?.();
+			new Notice(`Reveal Hidden Files: applied ${applied} recommended shortcut.`);
+		} catch {
+			new Notice(
+				'Couldn’t set the shortcut automatically. Open Settings → Hotkeys, search "Reveal Hidden Files," and set ⌥H by hand.',
+			);
+		}
+	}
+
+	/**
+	 * Clear every Reveal Hidden Files shortcut, back to the shipped no-shortcut
+	 * default — the exact inverse of applyRecommendedHotkeys. Touches only this
+	 * plugin's own commands; other plugins and core hotkeys are untouched.
+	 */
+	resetHotkeys(): void {
+		try {
+			const hk = (this.app as unknown as {
+				hotkeyManager?: {
+					setHotkeys?: (id: string, h: unknown[]) => void;
+					removeHotkeys?: (id: string) => void;
+					customKeys?: Record<string, unknown[]>;
+					bake?: () => void;
+					save?: () => void;
+				};
+			}).hotkeyManager;
+			if (!hk) throw new Error("no hotkey manager");
+			const prefix = `${this.manifest.id}:`;
+			const all = (this.app as unknown as {
+				commands?: { commands?: Record<string, unknown> };
+			}).commands?.commands ?? {};
+			const ids = Object.keys(all).filter((id) => id.startsWith(prefix));
+			let cleared = 0;
+			for (const id of ids) {
+				if (typeof hk.removeHotkeys === "function") hk.removeHotkeys(id);
+				else if (typeof hk.setHotkeys === "function") hk.setHotkeys(id, []);
+				else if (hk.customKeys) delete hk.customKeys[id];
+				else throw new Error("unsupported hotkey manager");
+				cleared++;
+			}
+			hk.bake?.();
+			hk.save?.();
+			new Notice(`Reveal Hidden Files: cleared ${cleared} shortcut.`);
+		} catch {
+			new Notice(
+				'Couldn’t clear the shortcut automatically. Open Settings → Hotkeys, search "Reveal Hidden Files," and clear it by hand.',
+			);
+		}
+	}
+
+	/**
+	 * Open Obsidian's Hotkeys settings tab, pre-filtered to this plugin's
+	 * commands. The "Go to Reveal Hidden Files settings" button on that tab is
+	 * injected by setupHotkeysBackButton, which keeps it in sync however you reach
+	 * the tab.
+	 */
+	openHotkeysTab(): void {
+		const setting = (this.app as unknown as {
+			setting?: {
+				open?: () => void;
+				openTabById?: (id: string) => unknown;
+				activeTab?: { setQuery?: (q: string) => void };
+			};
+		}).setting;
+		if (!setting?.openTabById) return;
+		setting.open?.();
+		setting.openTabById("hotkeys");
+		// Filter to this plugin once the tab has rendered; the watcher injects the button.
+		window.setTimeout(() => setting?.activeTab?.setQuery?.(this.manifest.name), 0);
+	}
+
+	/**
+	 * Make "Go to Reveal Hidden Files settings" appear on Obsidian's Hotkeys tab
+	 * whenever it is filtered to this plugin's commands — no matter how you get
+	 * there (this plugin's "Open Hotkeys" button, the settings sidebar, or
+	 * Obsidian's per-plugin hotkey shortcut). A cheap always-on watcher notices
+	 * the Settings window opening; a scoped watcher then keeps the button in sync
+	 * while Settings is open. Both are idempotent and debounced, and do no work
+	 * while you are editing.
+	 */
+	private setupHotkeysBackButton(): void {
+		const syncModal = (): void => {
+			const modal = document.querySelector<HTMLElement>(".mod-settings");
+			if (modal && modal !== this.hotkeysBackWatchedModal) {
+				this.detachHotkeysTabObserver();
+				this.attachHotkeysTabObserver(modal);
+			} else if (!modal && this.hotkeysBackWatchedModal) {
+				this.detachHotkeysTabObserver();
+			}
+		};
+		this.hotkeysBackBodyObserver = new MutationObserver(syncModal);
+		this.hotkeysBackBodyObserver.observe(document.body, { childList: true });
+		syncModal(); // catch a Settings window that is already open
+		this.register(() => {
+			this.hotkeysBackBodyObserver?.disconnect();
+			this.hotkeysBackBodyObserver = null;
+			this.detachHotkeysTabObserver();
+		});
+	}
+
+	private attachHotkeysTabObserver(modal: HTMLElement): void {
+		this.hotkeysBackWatchedModal = modal;
+		const reeval = (): void => {
+			this.hotkeysBackReevalQueued = false;
+			this.syncHotkeysBackButton(modal);
+		};
+		const schedule = (): void => {
+			if (this.hotkeysBackReevalQueued) return;
+			this.hotkeysBackReevalQueued = true;
+			window.setTimeout(reeval, 100); // debounce re-renders (tab switch, typing)
+		};
+		this.hotkeysBackTabObserver = new MutationObserver(schedule);
+		this.hotkeysBackTabObserver.observe(modal, { childList: true, subtree: true });
+		reeval();
+	}
+
+	private detachHotkeysTabObserver(): void {
+		this.hotkeysBackTabObserver?.disconnect();
+		this.hotkeysBackTabObserver = null;
+		if (this.hotkeysBackWatchedModal) {
+			this.removeHotkeysBackButton(this.hotkeysBackWatchedModal);
+		}
+		this.hotkeysBackWatchedModal = null;
+	}
+
+	/**
+	 * Show the button only when the Hotkeys tab is active, a search filter is in
+	 * effect, and at least one visible command row belongs to this plugin;
+	 * otherwise remove it. Idempotent — safe to run on every (debounced) mutation.
+	 */
+	private syncHotkeysBackButton(modal: HTMLElement): void {
+		const setting = (this.app as unknown as {
+			setting?: { activeTab?: { id?: string } };
+		}).setting;
+		const content = modal.querySelector<HTMLElement>(".vertical-tab-content");
+		if (!content || setting?.activeTab?.id !== "hotkeys") {
+			this.removeHotkeysBackButton(modal);
+			return;
+		}
+		const search = content.querySelector<HTMLInputElement>("input");
+		if (!search || search.value.trim() === "") {
+			this.removeHotkeysBackButton(modal); // no filter → don't clutter the full list
+			return;
+		}
+		const prefix = `${this.manifest.name}:`;
+		const ours = Array.from(content.querySelectorAll(".setting-item-name")).some(
+			(el) => (el.textContent ?? "").startsWith(prefix),
+		);
+		if (!ours) {
+			this.removeHotkeysBackButton(modal);
+			return;
+		}
+		this.ensureHotkeysBackButton(content);
+	}
+
+	private ensureHotkeysBackButton(content: HTMLElement): void {
+		if (content.querySelector(".rhf-hotkeys-back")) return; // already present
+		const setting = (this.app as unknown as {
+			setting?: { openTabById?: (id: string) => unknown };
+		}).setting;
+		const bar = content.createDiv({ cls: "rhf-hotkeys-back" });
+		bar
+			.createEl("button", { text: `Go to ${this.manifest.name} settings` })
+			.addEventListener("click", () => setting?.openTabById?.(this.manifest.id));
+		content.prepend(bar);
+	}
+
+	private removeHotkeysBackButton(root: HTMLElement): void {
+		root.querySelectorAll(".rhf-hotkeys-back").forEach((el) => el.remove());
+	}
+
 	private async cleanup() {
 		await this.hideAll();
 		this.hiddenPaths.clear();
@@ -284,17 +489,20 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	}
 
 	/**
-	 * Auto-surface wrapper. Per the v0.3.0 design doc:
+	 * Auto-surface wrapper:
 	 *   1. Non-hidden paths fall through immediately.
-	 *   2. Hidden paths get an `_exists` check. If the file is gone
-	 *      from disk, drop from `hiddenPaths` and `surfacedPaths` and
-	 *      fall through (let original `reconcileDeletion` do its work).
-	 *   3. Hidden+existing paths are added to `hiddenPaths`. If the
-	 *      filter passes (toggle on AND not denied), also call
-	 *      `reconcileFileInternal` to surface and add to
-	 *      `surfacedPaths`.
-	 *   4. If the filter does not pass, fall through to original
-	 *      `reconcileDeletion` so Obsidian's normal hiding applies.
+	 *   2. Denied paths (deny-list match) fall through immediately, BEFORE the
+	 *      filesystem stat below — they are never surfaced, so stat-ing them is
+	 *      pure waste. This is the hot path: heavy `.git/` churn (a git commit,
+	 *      checkout, or status) makes Obsidian's watcher fire reconcileDeletion
+	 *      for thousands of entries, and a per-call `_exists` stat floods Node's
+	 *      libuv thread pool — a multi-core CPU spike. Skipping denied paths here
+	 *      keeps that churn off the filesystem entirely.
+	 *   3. Remaining hidden paths get an `_exists` check. If the file is gone from
+	 *      disk, drop from `hiddenPaths` / `surfacedPaths` and fall through.
+	 *   4. Hidden+existing paths are added to `hiddenPaths`; if the toggle is on,
+	 *      `reconcileFileInternal` surfaces them and adds to `surfacedPaths`.
+	 *   5. Otherwise fall through to the original `reconcileDeletion`.
 	 */
 	private installAdapterPatch() {
 		const adapter = this.app.vault.adapter as unknown as AdapterInternals;
@@ -313,6 +521,11 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 					if (!isHiddenPath(path)) {
 						return callOriginal(realPath, path);
 					}
+					// Denied paths are never surfaced — short-circuit BEFORE the fs stat
+					// so heavy .git/ churn never hits the filesystem (the multi-core spike).
+					if (this.isDenied(path)) {
+						return callOriginal(realPath, path);
+					}
 					try {
 						const exists = await adapter._exists(adapter.getFullPath(path), path);
 						if (!exists) {
@@ -321,7 +534,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 							return callOriginal(realPath, path);
 						}
 						this.hiddenPaths.add(path);
-						if (this.settings.showHidden && !this.isDenied(path)) {
+						if (this.settings.showHidden) {
 							await adapter.reconcileFileInternal(realPath, path);
 							this.surfacedPaths.add(path);
 							return;
@@ -657,5 +870,49 @@ class RevealHiddenFilesSettingTab extends PluginSettingTab {
 			.setDesc(
 				"This plugin handles dotfile visibility only. To also show files with unrecognized extensions (.log, .env, .gitkeep, extension-less files), enable Obsidian's \"detect all file extensions\" setting under settings → files & links. This plugin does not toggle that setting.",
 			);
+
+		containerEl.createEl("hr", { cls: "rhf-settings-divider" });
+		new Setting(containerEl)
+			.setName("Hotkey scheme")
+			.setDesc(
+				"The command ships with no shortcut — an unvetted guess clashes with Obsidian's own keys too easily. Apply All sets the recommended shortcut (shown below); Remove All clears it; Open Hotkeys lets you bind it yourself.",
+			)
+			.setHeading();
+		new Setting(containerEl)
+			.setName("Apply recommended shortcut")
+			.setDesc(
+				"Set the recommended shortcut in one click. Replaces only Reveal Hidden Files' own shortcut; other plugins are untouched.",
+			)
+			.addButton((b) =>
+				b
+					.setButtonText("Apply All")
+					.setCta()
+					.onClick(() => this.plugin.applyRecommendedHotkeys()),
+			);
+		new Setting(containerEl)
+			.setName("Remove all Reveal Hidden Files shortcuts")
+			.setDesc(
+				"Clear every Reveal Hidden Files shortcut, back to the shipped no-shortcut default. The exact inverse of Apply All — other plugins are untouched.",
+			)
+			.addButton((b) =>
+				b
+					.setButtonText("Remove All")
+					.setWarning()
+					.onClick(() => this.plugin.resetHotkeys()),
+			);
+		new Setting(containerEl)
+			.setName("Open Hotkeys settings")
+			.setDesc("Jump to Obsidian's Hotkeys tab, filtered to Reveal Hidden Files, to view or change the shortcut.")
+			.addButton((b) =>
+				b.setButtonText("Open Hotkeys").onClick(() => this.plugin.openHotkeysTab()),
+			);
+		const opt = Platform.isMacOS ? "⌥" : "Alt";
+		const grid = containerEl.createDiv({ cls: "rhf-keymap" });
+		const row = (chord: string, what: string): void => {
+			const r = grid.createDiv({ cls: "rhf-keymap-row" });
+			r.createSpan({ cls: "rhf-keymap-chord", text: chord });
+			r.createSpan({ cls: "rhf-keymap-what", text: what });
+		};
+		row(`${opt} H`, "Toggle hidden files visibility");
 	}
 }

@@ -7,3 +7,51 @@
 	box-sizing: border-box;
 	font-family: var(--font-monospace);
 }
+
+/* "Go to Reveal Hidden Files settings" button injected on the Hotkeys tab. */
+.rhf-hotkeys-back {
+	margin: 0 0 12px;
+}
+.rhf-hotkeys-back button {
+	cursor: pointer;
+}
+
+.rhf-settings-divider {
+	border: none;
+	border-top: 1px solid var(--background-modifier-border);
+	margin: 1.6em 0 0.6em;
+}
+
+/* Hotkey cheat-sheet: a contained card matching the other Aeleon plugins. */
+.rhf-keymap {
+	display: flex;
+	flex-direction: column;
+	margin: 0.6em 0 0.4em;
+	padding: 0.5em 16px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+}
+.rhf-keymap-row {
+	display: flex;
+	gap: 1.4em;
+	align-items: baseline;
+	padding: 0.4em 0;
+	border-top: 1px solid var(--background-modifier-border);
+}
+.rhf-keymap-row:first-child {
+	border-top: none;
+}
+.rhf-keymap-chord {
+	flex: 0 0 13em;
+	font-size: var(--font-ui-small);
+	letter-spacing: 0.14em;
+	line-height: 1.6;
+	color: var(--text-normal);
+}
+.rhf-keymap-what {
+	flex: 1 1 auto;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.6;
+}
