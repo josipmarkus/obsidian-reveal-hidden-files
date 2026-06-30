@@ -88,6 +88,14 @@ interface RevealHiddenFilesSettings {
 	 * removes any of the defaults.
 	 */
 	denyPatternsInitialized?: boolean;
+	/**
+	 * True after the one-time migration that adds `node_modules` to
+	 * `denyPatterns` has run. Separate from `denyPatternsInitialized` so
+	 * a vault that initialized before `node_modules` became a default
+	 * still receives it once on update, while a user who deliberately
+	 * removes it afterward is not re-seeded.
+	 */
+	nodeModulesDenyApplied?: boolean;
 }
 
 /**
@@ -95,13 +103,18 @@ interface RevealHiddenFilesSettings {
  * by default. `.git/` in any real git repository contains thousands of
  * object files (one per content snapshot) that block the renderer when
  * surfaced en masse. `.venv/` is the conventional Python virtual
- * environment directory and carries similar volume. The user can
- * remove any of these patterns through the settings panel; the
- * migration only runs once per vault.
+ * environment directory and carries similar volume. `node_modules`
+ * holds the build dependencies of any JavaScript/TypeScript project and
+ * routinely reaches tens of thousands of files, many of them hidden
+ * (`.bin`, `.cache`, `.package-lock.json`) — surfacing or stat-ing them
+ * is the same renderer/filesystem storm. The user can remove any of
+ * these patterns through the settings panel; the migration only runs
+ * once per vault.
  */
 const DEFAULT_DENY_PATTERNS = [
 	".git",
 	".venv",
+	"node_modules",
 ];
 
 const DEFAULT_SETTINGS: RevealHiddenFilesSettings = {
@@ -609,10 +622,17 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 
 	/**
 	 * Gitignore-style deny matching per requirements v0.3.0 FR3:
-	 *   - Patterns without a `/` match the basename at any depth
-	 *     (e.g., `.DS_Store` matches `.DS_Store`, `notes/.DS_Store`,
-	 *     `notes/archive/.DS_Store`). The natural mental model users
-	 *     bring from `.gitignore`, `.dockerignore`, `.npmignore`.
+	 *   - Patterns without a `/` match ANY path segment, so they cover
+	 *     both a file at any depth (`.DS_Store` matches `.DS_Store`,
+	 *     `notes/.DS_Store`, `notes/archive/.DS_Store`) AND everything
+	 *     nested inside a matching folder (`node_modules` matches
+	 *     `plugins/app/node_modules/.bin/x`; `.git` matches
+	 *     `.git/objects/ab/cdef`). A prior version matched only the
+	 *     basename, which denied the folder entry itself but not the
+	 *     thousands of files inside it — so a `.git`/`node_modules` deny
+	 *     never actually stopped the file-watcher storm those folders
+	 *     cause. Segment matching is the mental model users bring from
+	 *     `.gitignore`, `.dockerignore`, `.npmignore`.
 	 *   - Patterns with a `/` use minimatch full-path globbing
 	 *     (e.g., `.git/**` matches everything inside any root `.git/`,
 	 *     and a pattern targeting a specific path under `.obsidian/`
@@ -621,11 +641,11 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	 */
 	private isDenied(path: string): boolean {
 		if (this.settings.denyPatterns.length === 0) return false;
-		const basename = path.split("/").pop() ?? "";
+		const segments = path.split("/");
 		return this.settings.denyPatterns.some((pattern) => {
 			try {
 				if (!pattern.includes("/")) {
-					return minimatch(basename, pattern);
+					return segments.some((segment) => minimatch(segment, pattern));
 				}
 				return minimatch(path, pattern);
 			} catch {
@@ -822,6 +842,17 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 				}
 			}
 			this.settings.denyPatternsInitialized = true;
+			await this.saveSettings();
+		}
+		// One-time migration (v0.4.2): add the `node_modules` deny to
+		// vaults that initialized before it became a default, so existing
+		// users get the fix on update. Gated by its own flag so a user who
+		// removes it afterward is not re-seeded.
+		if (loaded?.nodeModulesDenyApplied !== true) {
+			if (!this.settings.denyPatterns.includes("node_modules")) {
+				this.settings.denyPatterns.push("node_modules");
+			}
+			this.settings.nodeModulesDenyApplied = true;
 			await this.saveSettings();
 		}
 	}
