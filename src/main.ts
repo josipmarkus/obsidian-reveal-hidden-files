@@ -52,6 +52,25 @@ import { App, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolde
 import { minimatch } from "minimatch";
 import * as fs from "fs";
 
+/**
+ * Minimal typed surface for the one Node `fs` call this plugin makes
+ * (`fs.promises.readdir` with `withFileTypes`). Declared locally so
+ * type-checking does not depend on the Node type definitions
+ * (`@types/node`) being present: the community-store code scanner
+ * type-checks without them, which otherwise makes every `fs` access
+ * resolve to `any` and cascade into unsafe-value warnings. This pins
+ * concrete types at the call site; behavior is unchanged.
+ */
+interface FsDirEntry {
+	name: string;
+	isDirectory(): boolean;
+}
+const fsPromises = (fs as unknown as {
+	promises: {
+		readdir(path: string, options: { withFileTypes: true }): Promise<FsDirEntry[]>;
+	};
+}).promises;
+
 /** Settings persisted per vault via Obsidian's loadData / saveData APIs. */
 interface RevealHiddenFilesSettings {
 	/** When true, non-denied dotfile entries are surfaced in the File Explorer. */
@@ -300,7 +319,8 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 				"toggle-hidden-files": { modifiers: ["Alt"], key: "H" },
 			};
 			let applied = 0;
-			for (const [cmd, chord] of Object.entries(scheme)) {
+			for (const cmd of Object.keys(scheme)) {
+				const chord = scheme[cmd];
 				const id = `${this.manifest.id}:${cmd}`;
 				if (typeof hk.setHotkeys === "function") hk.setHotkeys(id, [chord]);
 				else if (hk.customKeys) hk.customKeys[id] = [chord];
@@ -389,7 +409,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	 */
 	private setupHotkeysBackButton(): void {
 		const syncModal = (): void => {
-			const modal = document.querySelector<HTMLElement>(".mod-settings");
+			const modal = activeDocument.querySelector<HTMLElement>(".mod-settings");
 			if (modal && modal !== this.hotkeysBackWatchedModal) {
 				this.detachHotkeysTabObserver();
 				this.attachHotkeysTabObserver(modal);
@@ -398,7 +418,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 			}
 		};
 		this.hotkeysBackBodyObserver = new MutationObserver(syncModal);
-		this.hotkeysBackBodyObserver.observe(document.body, { childList: true });
+		this.hotkeysBackBodyObserver.observe(activeDocument.body, { childList: true });
 		syncModal(); // catch a Settings window that is already open
 		this.register(() => {
 			this.hotkeysBackBodyObserver?.disconnect();
@@ -721,9 +741,9 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 		// fs.readdir returns every entry on disk regardless
 		// of name.
 		const fullParent = adapter.getFullPath(parentPath === "/" ? "" : parentPath);
-		let entries: import("fs").Dirent[];
+		let entries: FsDirEntry[];
 		try {
-			entries = await fs.promises.readdir(fullParent, { withFileTypes: true });
+			entries = await fsPromises.readdir(fullParent, { withFileTypes: true });
 		} catch {
 			return;
 		}
@@ -897,7 +917,7 @@ class RevealHiddenFilesSettingTab extends PluginSettingTab {
 			.addButton((b) =>
 				b
 					.setButtonText("Remove All")
-					.setWarning()
+					.setDestructive()
 					.onClick(() => this.plugin.resetHotkeys()),
 			);
 		new Setting(containerEl)
