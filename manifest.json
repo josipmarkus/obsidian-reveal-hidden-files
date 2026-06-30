@@ -1,8 +1,8 @@
 {
 	"id": "reveal-hidden-files",
 	"name": "Reveal Hidden Files",
-	"version": "0.4.2",
-	"minAppVersion": "1.13.1",
+	"version": "0.4.3",
+	"minAppVersion": "1.5.0",
 	"description": "Reveal dot-prefixed files and folders in the File Explorer panel, with a per-pattern deny list.",
 	"author": "Josip Markus",
 	"authorUrl": "https://github.com/josipmarkus",

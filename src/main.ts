@@ -948,7 +948,7 @@ class RevealHiddenFilesSettingTab extends PluginSettingTab {
 			.addButton((b) =>
 				b
 					.setButtonText("Remove All")
-					.setDestructive()
+					.setWarning()
 					.onClick(() => this.plugin.resetHotkeys()),
 			);
 		new Setting(containerEl)
