@@ -49,7 +49,7 @@
  */
 
 import { App, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder } from "obsidian";
-import { minimatch } from "minimatch";
+import { Minimatch } from "minimatch";
 import * as fs from "fs";
 
 /**
@@ -72,6 +72,17 @@ const fsPromises = (fs as unknown as {
 }).promises;
 
 /** Settings persisted per vault via Obsidian's loadData / saveData APIs. */
+/**
+ * One deny pattern compiled once. `fullPath` records which matching
+ * mode the pattern uses so `isDenied` does not re-inspect the string.
+ */
+interface DenyMatcher {
+	/** Pattern contains `/`: match against the whole vault-relative path. */
+	fullPath: boolean;
+	/** Compiled matcher, reused across every path. */
+	mm: Minimatch;
+}
+
 interface RevealHiddenFilesSettings {
 	/** When true, non-denied dotfile entries are surfaced in the File Explorer. */
 	showHidden: boolean;
@@ -266,6 +277,15 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	 * thousands of denied paths that are tracked but never surfaced.
 	 */
 	private surfacedPaths: Set<string> = new Set();
+	/**
+	 * Compiled `denyPatterns`, keyed by a signature of the patterns they
+	 * were built from. Compared by content, not array identity:
+	 * `loadSettings` pushes migration defaults in place, which leaves
+	 * identity unchanged, so an identity check could serve a stale
+	 * matcher set.
+	 */
+	private denyMatchers: DenyMatcher[] | null = null;
+	private denyMatchersKey: string | null = null;
 	private unpatch: (() => void) | null = null;
 	private toggling = false;
 
@@ -640,18 +660,58 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	 * Both forms coexist in a single deny list.
 	 */
 	private isDenied(path: string): boolean {
-		if (this.settings.denyPatterns.length === 0) return false;
-		const segments = path.split("/");
-		return this.settings.denyPatterns.some((pattern) => {
+		const matchers = this.getDenyMatchers();
+		if (matchers.length === 0) return false;
+		let segments: string[] | null = null;
+		for (const m of matchers) {
 			try {
-				if (!pattern.includes("/")) {
-					return segments.some((segment) => minimatch(segment, pattern));
+				if (m.fullPath) {
+					if (m.mm.match(path)) return true;
+					continue;
 				}
-				return minimatch(path, pattern);
+				// Lazily split: only needed once a segment matcher exists.
+				segments ??= path.split("/");
+				for (const segment of segments) {
+					if (m.mm.match(segment)) return true;
+				}
 			} catch {
-				return false;
+				// A malformed pattern never denies; skip it.
 			}
-		});
+		}
+		return false;
+	}
+
+	/**
+	 * Compiled deny matchers, rebuilt only when `denyPatterns` changes.
+	 *
+	 * The top-level `minimatch(str, pattern)` helper re-parses and
+	 * re-compiles the glob on EVERY call. `isDenied` runs once per
+	 * vault path per pass (and `cleanupDeniedEntries` iterates the
+	 * whole `fileMap`), so on a large vault that is millions of throwaway
+	 * compiles — measured at ~3.5ms per `isDenied` call on a 34k-entry
+	 * vault, i.e. minutes of blocked renderer at `onLayoutReady`, with
+	 * the allocation churn driving the heap past 2GB and adding GC
+	 * thrash on top. Compiling each pattern once into a `Minimatch`
+	 * and reusing it drops the same call to a few microseconds.
+	 */
+	private getDenyMatchers(): DenyMatcher[] {
+		const patterns = this.settings.denyPatterns;
+		const key = patterns.join("\n");
+		if (this.denyMatchers && this.denyMatchersKey === key) {
+			return this.denyMatchers;
+		}
+		const built: DenyMatcher[] = [];
+		for (const pattern of patterns) {
+			try {
+				built.push({ fullPath: pattern.includes("/"), mm: new Minimatch(pattern) });
+			} catch {
+				// Drop malformed patterns at compile time rather than
+				// re-throwing per path.
+			}
+		}
+		this.denyMatchers = built;
+		this.denyMatchersKey = key;
+		return built;
 	}
 
 	/**
