@@ -55,3 +55,8 @@
 	font-size: var(--font-ui-small);
 	line-height: 1.6;
 }
+
+/* Denied entries stay indexed so metadata and link resolution remain valid. */
+.nav-files-container .rhf-denied {
+	display: none !important;
+}

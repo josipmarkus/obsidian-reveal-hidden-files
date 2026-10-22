@@ -25,6 +25,7 @@ The plugin ships with default deny patterns for `.git/` and `.venv/` so vaults w
 
 - Reveals any vault-relative path whose name begins with `.`, at any depth — except entries matching a deny pattern
 - Works for root-level and nested hidden paths, including deep dot-folders inside non-hidden parents (`projects/app/.cache/`, `notes/archive/.backups/`, etc.)
+- Denied entries already indexed by Obsidian are hidden only in the File Explorer; they remain available to core indexing and link resolution.
 - Deny patterns use gitignore-style basename matching for bare names; full-path minimatch for patterns with `/`
 - Toggle state and deny patterns persist per vault across Obsidian restarts
 - Default deny patterns for `.git` and `.venv` are seeded on first plugin load; remove them in settings if you want those folders visible
@@ -62,6 +63,7 @@ Build from source:
 
 ```bash
 npm install      # install dependencies
+npm test         # regression tests (mocked Obsidian API and explorer DOM)
 npm run build    # production bundle (writes main.js)
 npm run dev      # watch build for iterating against a side-loaded vault
 ```

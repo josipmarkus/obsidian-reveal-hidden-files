@@ -4,6 +4,7 @@
 	"description": "Toggle the visibility of hidden files and folders in the File Explorer panel.",
 	"main": "main.js",
 	"scripts": {
+		"test": "node --test tests/*.test.cjs",
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
 	},
