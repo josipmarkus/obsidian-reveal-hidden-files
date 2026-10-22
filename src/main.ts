@@ -1,5 +1,5 @@
 /**
- * Reveal Hidden Files — Obsidian plugin v0.3.7.
+ * Reveal Hidden Files — Obsidian desktop plugin.
  *
  * Shows or hides dot-prefixed files and folders in Obsidian's File
  * Explorer panel. Per-pattern deny list (minimatch syntax) keeps
@@ -30,12 +30,9 @@
  *           inside non-hidden parents.
  *   - On toggle change, iterate `hiddenPaths` and apply the current
  *     filter to each path (surface non-denied, un-surface denied).
- *   - Force-removal fallback for vaults where `reconcileDeletion`
- *     returns successfully but leaves the entry in `vault.fileMap`
- *     (observed in large vaults; root cause unexplained).
- *   - One-time migration on plugin load seeds the default deny
- *     patterns and force-removes orphan entries from prior v0.2.x
- *     sessions that surfaced everything.
+ *   - Denied entries already indexed by Obsidian are hidden only in
+ *     the File Explorer. Vault entries and metadata stay consistent.
+ *   - One-time migrations seed the default deny patterns.
  *
  * The `reconcileDeletion`-interception pattern is adapted from
  * polyipseity/obsidian-show-hidden-files. The default deny patterns
@@ -48,7 +45,7 @@
  * that differ between desktop and mobile builds.
  */
 
-import { App, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder } from "obsidian";
+import { App, Notice, Platform, Plugin, PluginSettingTab, Setting } from "obsidian";
 import { Minimatch } from "minimatch";
 import * as fs from "fs";
 
@@ -200,67 +197,6 @@ function isHiddenPath(path: string): boolean {
 	return path.split("/").some((seg) => seg.startsWith(".") && seg !== "." && seg !== "..");
 }
 
-/**
- * Returns the vault tree's view of `path`: "folder" / "file" / "null" /
- * "other". `hideAll` calls it before and after `reconcileDeletion` to
- * decide whether the force-removal fallback is needed.
- */
-function vaultKind(app: App, path: string): string {
-	const f = app.vault.getAbstractFileByPath(path);
-	if (f === null) return "null";
-	if (f instanceof TFolder) return "folder";
-	if (f instanceof TFile) return "file";
-	return "other";
-}
-
-/**
- * Force-remove an entry from Obsidian's vault tree and the File
- * Explorer view. Fallback path for the v0.2.x-observed "reconcileDeletion
- * no-op at scale" symptom: in some vaults the standard
- * `adapter.reconcileDeletion` returns successfully but leaves the
- * entry in `vault.fileMap` and in the view's `fileItems` map. Root
- * cause unexplained as of v0.3.0; mitigated by this helper.
- *
- * Steps:
- *   1. Splice the entry from its parent folder's `children` array.
- *   2. Delete the path from `vault.fileMap`.
- *   3. Detach the File Explorer view's `FileItem.el` from the DOM and
- *      remove the path from `view.fileItems`.
- *
- * Touches private Obsidian internals (`vault.fileMap`,
- * `view.fileItems`, `FileItem.el`). Stable in practice across
- * supported Obsidian versions; not part of the public plugin API.
- */
-function forceRemove(app: App, path: string): void {
-	const file = app.vault.getAbstractFileByPath(path);
-	if (file === null) return;
-
-	const parent = file.parent;
-	if (parent && Array.isArray(parent.children)) {
-		const idx = parent.children.indexOf(file);
-		if (idx >= 0) parent.children.splice(idx, 1);
-	}
-
-	const vaultAny = app.vault as unknown as { fileMap?: Record<string, unknown> };
-	if (vaultAny.fileMap && path in vaultAny.fileMap) {
-		delete vaultAny.fileMap[path];
-	}
-
-	const explorerLeaf = app.workspace.getLeavesOfType("file-explorer")[0];
-	if (explorerLeaf) {
-		const view = explorerLeaf.view as unknown as {
-			fileItems?: Record<string, { el?: HTMLElement }>;
-		};
-		if (view.fileItems && path in view.fileItems) {
-			const item = view.fileItems[path];
-			if (item?.el && typeof item.el.remove === "function") {
-				item.el.remove();
-			}
-			delete view.fileItems[path];
-		}
-	}
-}
-
 export default class RevealHiddenFilesPlugin extends Plugin {
 	settings: RevealHiddenFilesSettings = DEFAULT_SETTINGS;
 	/**
@@ -287,6 +223,9 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	private denyMatchers: DenyMatcher[] | null = null;
 	private denyMatchersKey: string | null = null;
 	private unpatch: (() => void) | null = null;
+	private reconcileDeletion: AdapterInternals["reconcileDeletion"] | null = null;
+	private explorerObservers = new Map<HTMLElement, MutationObserver>();
+	private unloading = false;
 	private toggling = false;
 
 	// "Go to settings" button injected on the Hotkeys tab — see setupHotkeysBackButton.
@@ -315,9 +254,14 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 
 		this.installAdapterPatch();
 
+		this.registerEvent(this.app.workspace.on("layout-change", () => {
+			if (!this.unloading) this.refreshExplorerVisibility();
+		}));
 		this.app.workspace.onLayoutReady(async () => {
-			this.cleanupDeniedEntries();
+			this.refreshExplorerVisibility();
+			if (this.unloading) return;
 			await this.initialListRecursive();
+			if (this.unloading) return;
 			await this.walkNonHiddenForDots("/");
 			// Intentionally skip applyVisibility here: the patch wrapper
 			// (during listRecursive) and walkNonHiddenForDots have already
@@ -532,6 +476,14 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	}
 
 	private async cleanup() {
+		this.unloading = true;
+		for (const [container, observer] of this.explorerObservers) {
+			observer.disconnect();
+			for (const item of Array.from(container.querySelectorAll(".rhf-denied"))) {
+				item.classList.remove("rhf-denied");
+			}
+		}
+		this.explorerObservers.clear();
 		await this.hideAll();
 		this.hiddenPaths.clear();
 		this.surfacedPaths.clear();
@@ -560,6 +512,8 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	private installAdapterPatch() {
 		const adapter = this.app.vault.adapter as unknown as AdapterInternals;
 
+		this.reconcileDeletion = adapter.reconcileDeletion.bind(adapter);
+
 		this.unpatch = around(
 			adapter as unknown as Record<string, unknown>,
 			"reconcileDeletion",
@@ -587,7 +541,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 							return callOriginal(realPath, path);
 						}
 						this.hiddenPaths.add(path);
-						if (this.settings.showHidden) {
+						if (this.settings.showHidden && !this.unloading) {
 							await adapter.reconcileFileInternal(realPath, path);
 							this.surfacedPaths.add(path);
 							return;
@@ -634,6 +588,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	 * Settings → Files & Links.
 	 */
 	async applyVisibility() {
+		this.refreshExplorerVisibility();
 		await this.hideAll();
 		if (this.settings.showHidden) {
 			await this.showAll();
@@ -681,19 +636,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 		return false;
 	}
 
-	/**
-	 * Compiled deny matchers, rebuilt only when `denyPatterns` changes.
-	 *
-	 * The top-level `minimatch(str, pattern)` helper re-parses and
-	 * re-compiles the glob on EVERY call. `isDenied` runs once per
-	 * vault path per pass (and `cleanupDeniedEntries` iterates the
-	 * whole `fileMap`), so on a large vault that is millions of throwaway
-	 * compiles — measured at ~3.5ms per `isDenied` call on a 34k-entry
-	 * vault, i.e. minutes of blocked renderer at `onLayoutReady`, with
-	 * the allocation churn driving the heap past 2GB and adding GC
-	 * thrash on top. Compiling each pattern once into a `Minimatch`
-	 * and reusing it drops the same call to a few microseconds.
-	 */
+	/** Compile patterns once per settings change, rather than per explorer entry. */
 	private getDenyMatchers(): DenyMatcher[] {
 		const patterns = this.settings.denyPatterns;
 		const key = patterns.join("\n");
@@ -725,6 +668,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 		const adapter = this.app.vault.adapter as unknown as AdapterInternals;
 		const paths = Array.from(this.hiddenPaths);
 		for (const path of paths) {
+			if (this.unloading) return;
 			if (this.isDenied(path)) continue;
 			try {
 				const realPath = adapter.getRealPath(path);
@@ -736,27 +680,19 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 		}
 	}
 
-	/**
-	 * Un-surface every currently-surfaced path. Iterates
-	 * `surfacedPaths` (small — bounded by what the filter has actually
-	 * exposed, not by total dotfile count). Tries `reconcileDeletion`
-	 * first; if the entry remains in `vault.fileMap` after the call,
-	 * applies the force-removal fallback.
-	 */
+	/** Let Obsidian emit deletion events so its metadata cache stays in sync. */
 	private async hideAll() {
 		const adapter = this.app.vault.adapter as unknown as AdapterInternals;
-		const paths = Array.from(this.surfacedPaths);
-		for (const path of paths) {
+		for (const path of Array.from(this.surfacedPaths)) {
 			try {
-				const before = vaultKind(this.app, path);
-				await adapter.reconcileDeletion(adapter.getRealPath(path), path);
-				const after = vaultKind(this.app, path);
-				if (after !== "null" && before !== "null") {
-					forceRemove(this.app, path);
+				// Bypass our reveal wrapper, including while editing deny patterns
+				// with showHidden still enabled. Never force-delete vault entries.
+				await this.reconcileDeletion?.(adapter.getRealPath(path), path);
+				if (this.app.vault.getAbstractFileByPath(path) === null) {
+					this.surfacedPaths.delete(path);
 				}
-				this.surfacedPaths.delete(path);
 			} catch {
-				// Skip paths that fail to un-surface; continue with the rest.
+				// Leave failed paths tracked so a later toggle can retry.
 			}
 		}
 	}
@@ -813,6 +749,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	 * `listRecursive("")`.
 	 */
 	private async walkNonHiddenForDots(parentPath: string): Promise<void> {
+		if (this.unloading) return;
 		const adapter = this.app.vault.adapter as unknown as AdapterInternals;
 		// v0.3.3: use Node's fs.readdir directly instead of adapter.list.
 		// `adapter.list` applies Obsidian's dotfile filter and silently
@@ -830,6 +767,7 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 		// Process hidden children of this folder (the entries
 		// `adapter.list` would have filtered out).
 		for (const entry of entries) {
+			if (this.unloading) return;
 			const name = entry.name;
 			if (!name.startsWith(".") || name === "." || name === "..") continue;
 			const childPath = parentPath === "/" ? name : `${parentPath}/${name}`;
@@ -866,23 +804,36 @@ export default class RevealHiddenFilesPlugin extends Plugin {
 	}
 
 	/**
-	 * Force-remove every vault-tree entry currently matching a deny
-	 * pattern. Runs once per plugin load, after settings are loaded
-	 * and before the initial `listRecursive`. Cleans up "orphan"
-	 * entries that earlier plugin versions (v0.2.5 and prior) had
-	 * surfaced into the vault tree but that the v0.3.0 defaults would
-	 * have denied.
+	 * Deny patterns control explorer visibility, not membership in the vault.
+	 * Removing indexed files here bypasses metadata deletion events and can
+	 * strand link resolution, which also blocks File Manager renames.
 	 */
-	private cleanupDeniedEntries() {
-		if (this.settings.denyPatterns.length === 0) return;
-		const vaultAny = this.app.vault as unknown as { fileMap?: Record<string, unknown> };
-		const fileMap = vaultAny.fileMap ?? {};
-		const denied = Object.keys(fileMap).filter((path) => this.isDenied(path));
-		if (denied.length === 0) return;
-		for (const path of denied) {
-			forceRemove(this.app, path);
-			this.hiddenPaths.delete(path);
-			this.surfacedPaths.delete(path);
+	private refreshExplorerVisibility(): void {
+		if (this.unloading) return;
+		const leaves = this.app.workspace.getLeavesOfType("file-explorer");
+		const containers = new Set(leaves.map((leaf) => leaf.view.containerEl));
+		for (const [container, observer] of this.explorerObservers) {
+			if (containers.has(container)) continue;
+			observer.disconnect();
+			for (const item of Array.from(container.querySelectorAll(".rhf-denied"))) {
+				item.classList.remove("rhf-denied");
+			}
+			this.explorerObservers.delete(container);
+		}
+		for (const container of containers) {
+			if (!this.explorerObservers.has(container)) {
+				const observer = new MutationObserver(() => this.refreshExplorerVisibility());
+				observer.observe(container, {
+					childList: true, subtree: true, attributes: true,
+					attributeFilter: ["data-path"],
+				});
+				this.explorerObservers.set(container, observer);
+			}
+			for (const title of Array.from(container.querySelectorAll<HTMLElement>("[data-path]"))) {
+				const path = title.getAttribute("data-path");
+				const item = title.closest<HTMLElement>(".nav-file, .nav-folder");
+				if (path !== null && item) item.classList.toggle("rhf-denied", this.isDenied(path));
+			}
 		}
 	}
 
@@ -970,9 +921,7 @@ class RevealHiddenFilesSettingTab extends PluginSettingTab {
 					.map((p) => p.trim())
 					.filter((p) => p.length > 0);
 				await this.plugin.saveSettings();
-				if (this.plugin.settings.showHidden) {
-					await this.plugin.applyVisibility();
-				}
+				await this.plugin.applyVisibility();
 			})();
 		});
 
